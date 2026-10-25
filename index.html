@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#102a43">
+    <title>MDT02 / MDS02 · Visor de recorte</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <main class="app-shell">
+        <aside class="sidebar">
+            <header class="brand">
+                <div class="brand-mark" aria-hidden="true">M4</div>
+                <div>
+                    <p class="eyebrow">HERRAMIENTA DE TERRENO</p>
+                    <h1>MDT02 / MDS02</h1>
+                    <p class="brand-subtitle">Modelos del terreno para planificar vuelos</p>
+                </div>
+            </header>
+
+            <section class="panel intro">
+                <span class="step-number">01</span>
+                <div>
+                    <h2>Define la zona de vuelo</h2>
+                    <p>Dibuja un polígono en el mapa. El archivo final conservará el modelo de elevación elegido únicamente dentro de esa zona.</p>
+                </div>
+            </section>
+
+            <section class="panel selection-panel" aria-labelledby="selection-title">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">ÁREA DE INTERÉS</p>
+                        <h2 id="selection-title">Polígono</h2>
+                    </div>
+                    <span id="selection-badge" class="badge badge-muted">Sin definir</span>
+                </div>
+                <button id="draw-button" class="button button-primary" type="button">
+                    <span aria-hidden="true">＋</span> Dibujar polígono
+                </button>
+                <div id="selection-summary" class="selection-summary" aria-live="polite">
+                    <span>Área</span>
+                    <strong id="area-value">—</strong>
+                    <span>Vértices</span>
+                    <strong id="vertex-value">—</strong>
+                </div>
+                <div id="centroid-panel" class="centroid-panel" aria-live="polite" hidden>
+                    <div class="centroid-heading">
+                        <div>
+                            <p class="eyebrow">COORDENADAS PARA CNIG</p>
+                            <strong>Centroide · ETRS89 / UTM</strong>
+                        </div>
+                        <span id="centroid-crs" class="centroid-crs"></span>
+                    </div>
+                    <div class="centroid-coordinate">
+                        <span>X · Este</span>
+                        <strong id="centroid-x"></strong>
+                    </div>
+                    <div class="centroid-coordinate">
+                        <span>Y · Norte</span>
+                        <strong id="centroid-y"></strong>
+                    </div>
+                    <button id="copy-centroid-button" class="button button-secondary" type="button">
+                        Copiar coordenadas X, Y
+                    </button>
+                </div>
+                <button id="export-button" class="button button-secondary" type="button" disabled>
+                    Descargar polígono GeoJSON
+                </button>
+                <button id="clear-button" class="button button-quiet" type="button" disabled>
+                    Borrar polígono
+                </button>
+            </section>
+
+            <section class="panel projects-panel" aria-labelledby="projects-title">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">BASE DE DATOS DRONES</p>
+                        <h2 id="projects-title">Proyectos guardados</h2>
+                    </div>
+                    <button id="new-project-button" class="button button-quiet new-project-button" type="button">Nuevo</button>
+                </div>
+                <label class="field-label" for="project-name">Nombre del proyecto</label>
+                <input id="project-name" class="text-input" type="text" maxlength="120" placeholder="Ej. Inspección ladera norte">
+                <button id="save-project-button" class="button button-primary" type="button" disabled>Guardar proyecto</button>
+                <div class="saved-projects">
+                    <label class="field-label" for="project-list">Abrir proyecto</label>
+                    <select id="project-list" class="text-input" aria-describedby="projects-status">
+                        <option value="">Cargando proyectos…</option>
+                    </select>
+                    <button id="open-project-button" class="button button-secondary" type="button" disabled>Abrir proyecto seleccionado</button>
+                </div>
+                <p id="projects-status" class="status-message" role="status" aria-live="polite">Conectando con la base de datos DRONES…</p>
+            </section>
+
+            <section class="panel source-panel">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">DATOS DE ELEVACIÓN</p>
+                        <h2>Obtener modelo CNIG</h2>
+                    </div>
+                    <span class="step-number">02</span>
+                </div>
+                <label class="field-label" for="product-select">Producto de elevación</label>
+                <select id="product-select" class="text-input">
+                    <option value="MDT02">MDT02 · Modelo Digital del Terreno</option>
+                    <option value="MDS02">MDS02 · Modelo Digital de Superficies</option>
+                </select>
+                <p id="product-description">MDT del suelo, con resolución de 2 m.</p>
+                <a id="catalog-link" class="button button-outline" href="https://centrodedescargas.cnig.es/CentroDescargas/modelo-digital-terreno-mdt02-segunda-cobertura" target="_blank" rel="noopener noreferrer">
+                    <span id="catalog-link-label">Abrir MDT02 en CNIG</span><span aria-hidden="true">↗</span>
+                </a>
+                <details class="help-details">
+                    <summary>¿Qué archivos debo descargar?</summary>
+                    <ol>
+                        <li>En CNIG, localiza los ficheros del producto seleccionado que cubren toda el área dibujada.</li>
+                        <li>Descarga los archivos GeoTIFF/COG (<code>.tif</code> o <code>.tiff</code>); no hace falta descomprimirlos.</li>
+                        <li>Si el polígono cruza varias hojas, selecciona todas las hojas que lo intersectan.</li>
+                    </ol>
+                </details>
+            </section>
+
+            <section class="panel upload-panel">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">PROCESADO LOCAL</p>
+                        <h2>Recortar y descargar</h2>
+                    </div>
+                    <span class="step-number">03</span>
+                </div>
+                <label class="file-picker" for="raster-files">
+                    <span class="file-picker-icon" aria-hidden="true">⇧</span>
+                    <span>
+                        <strong>Seleccionar GeoTIFF del CNIG</strong>
+                        <small id="file-summary">Puedes seleccionar varias hojas (.tif, .tiff)</small>
+                    </span>
+                </label>
+                <input id="raster-files" type="file" accept=".tif,.tiff,image/tiff" multiple>
+                <p class="limit-note">Hasta 50 km² por recorte. El límite puede ajustarse en la configuración local.</p>
+                <button id="clip-button" class="button button-dark" type="button" disabled>
+                    Recortar MDT02
+                </button>
+                <p id="status-message" class="status-message" role="status" aria-live="polite">
+                    Dibuja el polígono y selecciona los GeoTIFF descargados.
+                </p>
+                <div id="progress-wrap" class="progress-wrap" hidden>
+                    <div class="progress-track"><span id="progress-bar"></span></div>
+                    <span id="progress-label">Procesando…</span>
+                </div>
+            </section>
+
+            <footer class="sidebar-footer">
+                Los ficheros se procesan en este equipo. Datos MDT02/MDS02: CNIG · IGN, licencia CC-BY 4.0.
+            </footer>
+        </aside>
+
+        <section class="map-shell" aria-label="Mapa para definir el área del vuelo">
+            <div id="map" role="application" aria-label="Mapa interactivo"></div>
+            <div class="map-hint">
+                <span class="map-hint-dot" aria-hidden="true"></span>
+                <span>Haz clic en «Dibujar polígono» y marca el perímetro</span>
+            </div>
+            <div class="map-credit">Ortofoto PNOA · Instituto Geográfico Nacional</div>
+        </section>
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    <script src="https://unpkg.com/proj4@2.12.1/dist/proj4.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
