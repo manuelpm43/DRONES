@@ -337,12 +337,8 @@ summary:focus-visible,
     margin-bottom: 0;
 }
 
-.source-panel .field-label {
-    margin-top: 10px;
-}
-
-.source-panel > p#product-description {
-    margin-top: 6px;
+.button-outline-tight {
+    margin-top: 8px;
 }
 
 .centroid-panel {
@@ -482,7 +478,11 @@ summary:focus-visible,
     line-height: 1.4;
 }
 
-#raster-files {
+.file-picker-second {
+    margin-top: 8px;
+}
+
+.raster-input {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -535,6 +535,62 @@ summary:focus-visible,
     border-radius: inherit;
     background: var(--green);
     transition: width .15s ease;
+}
+
+.raster-results {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+}
+
+.raster-results[hidden] {
+    display: none;
+}
+
+.raster-list {
+    display: grid;
+    gap: 7px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.raster-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: #f9fbfc;
+}
+
+.raster-item strong,
+.raster-item small {
+    display: block;
+}
+
+.raster-item strong {
+    font-size: 11px;
+}
+
+.raster-item small {
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 10px;
+}
+
+.raster-item small[data-state="pending"] {
+    color: #a26a12;
+}
+
+.raster-item .button-secondary {
+    width: auto;
+    min-height: 30px;
+    margin: 0;
+    padding: 5px 10px;
+    font-size: 10px;
 }
 
 .sidebar-footer {
@@ -590,6 +646,139 @@ summary:focus-visible,
     border-radius: 50%;
     background: var(--teal);
     box-shadow: 0 0 0 4px #e0f3f3;
+}
+
+.model-panel {
+    position: absolute;
+    z-index: 400;
+    bottom: 18px;
+    left: 14px;
+    width: 210px;
+    padding: 9px 11px 8px;
+    border: 1px solid rgb(255 255 255 / 70%);
+    border-radius: 10px;
+    background: rgb(255 255 255 / 94%);
+    box-shadow: 0 4px 16px rgb(16 42 67 / 14%);
+}
+
+.model-panel[hidden],
+.elevation-legend[hidden] {
+    display: none;
+}
+
+.model-panel .eyebrow {
+    margin-bottom: 6px;
+}
+
+.model-switch {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    padding: 2px;
+    border-radius: 8px;
+    background: #edf1f4;
+}
+
+.model-switch button {
+    min-height: 28px;
+    padding: 4px 6px;
+    border: 0;
+    border-radius: 6px;
+    color: #40576c;
+    background: transparent;
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.model-switch button[aria-checked="true"] {
+    color: white;
+    background: var(--teal);
+}
+
+.model-switch button:disabled {
+    cursor: not-allowed;
+    opacity: .4;
+}
+
+.elevation-legend {
+    margin-top: 9px;
+}
+
+.legend-ramp {
+    height: 10px;
+    border-radius: 4px;
+}
+
+.legend-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 4px;
+    color: #29465f;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.flight-panel .field-label {
+    margin-top: 11px;
+}
+
+.flight-panel .selection-summary {
+    margin-top: 9px;
+}
+
+.selection-summary[hidden],
+.collision-results[hidden] {
+    display: none;
+}
+
+.map-picking {
+    cursor: crosshair;
+}
+
+.collision-results {
+    display: grid;
+    gap: 7px;
+    margin: 4px 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.collision-item {
+    padding: 9px 10px;
+    border: 1px solid var(--line);
+    border-left-width: 4px;
+    border-radius: 9px;
+    background: #f9fbfc;
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+.collision-item strong {
+    display: block;
+    margin-bottom: 2px;
+}
+
+.collision-item[data-state="ok"] {
+    border-left-color: var(--green);
+}
+
+.collision-item[data-state="collision"] {
+    border-left-color: var(--danger);
+    background: #fff7f6;
+}
+
+.collision-item[data-state="info"] {
+    border-left-color: #9aaab8;
+    color: var(--muted);
+}
+
+.collision-swatch {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    margin-right: 5px;
+    border-radius: 2px;
+    vertical-align: baseline;
 }
 
 .map-credit {

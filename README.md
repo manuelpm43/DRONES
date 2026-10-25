@@ -1,10 +1,10 @@
 # Visor UAS MDT02 / MDS02
 
-Visor web local para planificar zonas de vuelo con MDT02 (terreno) o MDS02
+Visor web local para planificar zonas de vuelo con MDT02 (terreno) y MDS02
 (superficies). Permite dibujar y guardar proyectos, descargar el polígono
-GeoJSON, cargar hojas CNIG y obtener un GeoTIFF mosaico recortado por el área.
-Los registros del proyecto se guardan en PostgreSQL, en una base independiente
-llamada `DRONES`; los rásteres no se almacenan dentro de la base.
+GeoJSON, cargar hojas CNIG de los dos productos y obtener un GeoTIFF mosaico
+recortado por el área para cada uno. Los proyectos, incluidos los dos GeoTIFF
+recortados, se guardan en PostgreSQL, en una base independiente llamada `DRONES`.
 
 ## Requisitos
 
@@ -24,9 +24,11 @@ CREATE ROLE drones_app LOGIN PASSWORD 'una-contraseña-segura';
 CREATE DATABASE "DRONES" OWNER drones_app;
 ```
 
-Conéctate a la base de datos `DRONES` y aplica [database/001_proyectos.sql](./database/001_proyectos.sql)
-con `drones_app` o un administrador. Si se aplica con un administrador,
-concede los permisos indicados al final del archivo de migración.
+Conéctate a la base de datos `DRONES` y aplica, en orden,
+[database/001_proyectos.sql](./database/001_proyectos.sql) y
+[database/002_proyecto_rasters.sql](./database/002_proyecto_rasters.sql)
+con `drones_app` o un administrador. Si se aplican con un administrador,
+concede los permisos indicados al final de cada migración.
 
 En el equipo que ejecutará el visor, copia `.env.example` a `.env` y configura
 la conexión PostgreSQL con credenciales propias de `drones_app`. No reutilices
@@ -58,27 +60,55 @@ usuario SSH debe tener la clave pública autorizada en el servidor.
 2. Consulta el centroide que aparece como coordenadas **X (Este), Y (Norte)**
    en ETRS89 / UTM; se indica el huso y el código EPSG. Puedes copiar el par
    `X, Y` y pegarlo en el localizador por coordenadas del CNIG.
-3. Elige **MDT02** o **MDS02**. El botón de CNIG abrirá el catálogo del producto
-   elegido: [MDT02 - 2.ª cobertura](https://centrodedescargas.cnig.es/CentroDescargas/modelo-digital-terreno-mdt02-segunda-cobertura)
-   o [MDS02 - 2.ª cobertura](https://centrodedescargas.cnig.es/CentroDescargas/modelo-digital-superficies-mds02-segunda-cobertura).
-4. Descarga manualmente todas las hojas GeoTIFF que cubren el polígono y
-   selecciónalas en el visor.
-5. Pulsa **Recortar MDT02** o **Recortar MDS02** para crear el mosaico
-   recortado.
-6. Asigna un nombre al proyecto y pulsa **Guardar proyecto**. Si abriste un
-   proyecto existente, el botón actualizará ese registro. Usa **Nuevo** para
-   empezar otro proyecto y el selector para volver a abrir los guardados.
-7. El navegador descarga el GeoTIFF recortado (`MDT02_recortado.tif` o
-   `MDS02_recortado.tif`), conservando el sistema de
-   coordenadas y la resolución original del raster. El exterior del polígono se
-   establece como NoData.
+3. Abre los catálogos del CNIG con los botones del visor:
+   [MDT02 - 2.ª cobertura](https://centrodedescargas.cnig.es/CentroDescargas/modelo-digital-terreno-mdt02-segunda-cobertura)
+   y [MDS02 - 2.ª cobertura](https://centrodedescargas.cnig.es/CentroDescargas/modelo-digital-superficies-mds02-segunda-cobertura).
+4. Descarga manualmente todas las hojas GeoTIFF de cada producto que cubren el
+   polígono y selecciónalas en su casilla del visor (**Hojas MDT02** y
+   **Hojas MDS02**).
+5. Pulsa **Recortar MDT02 y MDS02**: los dos mosaicos se recortan con el mismo
+   polígono. Si solo cargas uno de los productos, se recorta solo ese.
+6. Los GeoTIFF recortados (`MDT02_recortado.tif` y `MDS02_recortado.tif`)
+   aparecen en la lista del paso 03 y pueden descargarse desde ahí. Conservan
+   el sistema de coordenadas y la resolución original; el exterior del polígono
+   se establece como NoData.
+7. Asigna un nombre al proyecto y pulsa **Guardar proyecto**: se guardan el
+   polígono y los GeoTIFF recortados. Si abriste un proyecto existente, el
+   botón actualizará ese registro. Usa **Nuevo** para empezar otro proyecto y
+   el selector para volver a abrir los guardados y descargar sus GeoTIFF.
+
+Los modelos recortados o guardados se pintan sobre la ortofoto con una rampa de
+color por cota y sombreado de relieve. El selector **Modelo en el mapa** (abajo a
+la izquierda) muestra el MDT02, el MDS02 o ninguno; los dos usan la misma escala
+de cotas, indicada en la leyenda.
+
+### Análisis de vuelo (paso 04)
+
+1. Pulsa **Marcar punto de despegue** y haz clic en el mapa dentro de la zona
+   recortada: el visor lee la cota del MDT02 en ese punto.
+2. Indica la **altura de vuelo sobre el despegue** y, si quieres, un **margen de
+   seguridad**.
+3. Pulsa **Comprobar colisiones**. La altitud de vuelo es la cota del despegue
+   más la altura indicada; cada celda de la zona cuya cota la alcance (menos el
+   margen) se marca en rojo si es del MDT02 (terreno) o en naranja si es del
+   MDS02 (edificios, vegetación). El panel indica el área en colisión y la
+   holgura sobre el punto más alto de cada modelo.
+
+El análisis usa la malla que se pinta en el mapa, de como máximo 1024 celdas
+de lado; en recortes grandes cada celda agrupa varios píxeles de 2 m y toma la
+cota máxima de ellos, para no perder obstáculos.
+
+Si cambias el polígono de un proyecto guardado y no vuelves a recortar un
+producto, al guardar se descarta su GeoTIFF anterior, porque ya no corresponde
+a la nueva zona.
 
 El recorte se procesa localmente; los archivos no se envían a un servicio
-externo. En `DRONES` se guardan nombre, tipo de producto, polígono, área,
-centroide ETRS89/UTM, nombres de hojas fuente y metadatos del GeoTIFF de
-salida; el contenido ráster no se guarda en PostgreSQL. El visor admite
-GeoTIFF proyectados en metros, con resolución cercana a 2 m, y hojas en el
-mismo sistema de coordenadas. El área máxima por recorte es 50 km².
+externo. En `DRONES` se guardan nombre, polígono, área, centroide ETRS89/UTM y,
+en la tabla `proyecto_rasters`, cada GeoTIFF recortado con sus metadatos y los
+nombres de las hojas fuente. Las hojas originales del CNIG no se guardan. El
+visor admite GeoTIFF proyectados en metros, con resolución cercana a 2 m, y
+hojas en el mismo sistema de coordenadas. El área máxima por recorte es 50 km²
+y cada GeoTIFF guardado puede ocupar hasta 64 MB.
 
 ## Pruebas
 
@@ -95,6 +125,7 @@ Las variables de entorno opcionales permiten ajustar los límites del servidor:
 | `MDT02_MAX_UPLOAD_BYTES` | 1 GiB | Tamaño máximo total de la carga |
 | `MDT02_MAX_AREA_KM2` | 50 | Área máxima del polígono |
 | `MDT02_MAX_FILES` | 20 | Número máximo de GeoTIFF por mosaico |
+| `DRONES_MAX_RASTER_BYTES` | 64 MiB | Tamaño máximo de cada GeoTIFF recortado guardado en el proyecto |
 | `PORT` | 5000 | Puerto local del servidor |
 | `DRONES_PGHOST` | — | Servidor PostgreSQL que aloja `DRONES` |
 | `DRONES_PGPORT` | 5432 | Puerto PostgreSQL |

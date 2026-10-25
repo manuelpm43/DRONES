@@ -1,3 +1,6 @@
+import base64
+import binascii
+import io
 import json
 import importlib.util
 import logging
@@ -25,9 +28,16 @@ if _rasterio_spec and _rasterio_spec.origin:
 import rasterio
 from flask import Flask, jsonify, request, send_file, send_from_directory
 from rasterio.errors import RasterioError
+from rasterio.io import MemoryFile
 from rasterio.mask import mask
 from rasterio.merge import merge
-from rasterio.warp import transform_geom
+from rasterio.warp import (
+    Resampling,
+    calculate_default_transform,
+    reproject,
+    transform_bounds,
+    transform_geom,
+)
 from shapely.errors import ShapelyError
 from shapely.geometry import box, mapping, shape
 from shapely.ops import unary_union
@@ -38,6 +48,11 @@ load_dotenv(ROOT / ".env")
 MAX_UPLOAD_BYTES = int(os.environ.get("MDT02_MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
 MAX_AREA_KM2 = float(os.environ.get("MDT02_MAX_AREA_KM2", "50"))
 MAX_FILES = int(os.environ.get("MDT02_MAX_FILES", "20"))
+MAX_PROJECT_RASTER_BYTES = int(
+    os.environ.get("DRONES_MAX_RASTER_BYTES", str(64 * 1024 * 1024))
+)
+# Lado máximo, en píxeles, de la vista previa que se pinta en el mapa.
+PREVIEW_MAX_SIZE = 1024
 PORT = int(os.environ.get("PORT", "5000"))
 PRODUCTS = {
     "MDT02": {
@@ -49,6 +64,8 @@ PRODUCTS = {
         "filename": "MDS02_recortado.tif",
     },
 }
+PROJECT_COLUMNS = """id, name, geometry, area_m2, centroid_x, centroid_y,
+                     utm_zone, utm_epsg, created_at, updated_at"""
 
 app = Flask(__name__, static_folder=str(ROOT / "static"), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -98,57 +115,118 @@ def health():
 
 
 @app.post("/api/clip")
-def clip_mdt02():
-    files = request.files.getlist("rasters")
+def clip_rasters():
     geometry_text = request.form.get("geometry", "")
-    product = request.form.get("product", "MDT02").upper()
+    uploads = {
+        product: request.files.getlist("rasters_" + product)
+        for product in PRODUCTS
+    }
+    uploads = {product: files for product, files in uploads.items() if files}
 
-    if not files:
-        raise RequestError("Selecciona al menos un archivo GeoTIFF del CNIG.")
-    if product not in PRODUCTS:
-        raise RequestError("El producto debe ser MDT02 o MDS02.")
-    if len(files) > MAX_FILES:
-        raise RequestError("Has seleccionado demasiados archivos (máximo {}).".format(MAX_FILES))
+    if not uploads:
+        raise RequestError("Selecciona los GeoTIFF del CNIG de MDT02, MDS02 o ambos.")
+    for product, files in uploads.items():
+        if len(files) > MAX_FILES:
+            raise RequestError(
+                "Has seleccionado demasiados archivos {} (máximo {}).".format(product, MAX_FILES)
+            )
     if not geometry_text:
         raise RequestError("Dibuja el polígono antes de iniciar el recorte.")
 
     geometry = parse_geometry(geometry_text)
-    work_dir = Path(tempfile.mkdtemp(prefix="mdt02-"))
+    rasters = [clip_product(product, files, geometry) for product, files in uploads.items()]
+    response = jsonify(rasters=rasters)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def clip_product(product, files, geometry):
+    work_dir = Path(tempfile.mkdtemp(prefix="drones-"))
     try:
         source_paths, source_names = save_uploaded_files(files, work_dir)
         output_path, output_name, output_metadata = create_clipped_raster(
             source_paths, geometry, work_dir, product, source_names
         )
+        data = output_path.read_bytes()
     except RequestError:
-        shutil.rmtree(work_dir, ignore_errors=True)
         raise
     except (RasterioError, ValueError, OSError) as error:
-        shutil.rmtree(work_dir, ignore_errors=True)
         app.logger.warning("No se pudo procesar %s: %s", product, error)
         raise RequestError(
-            "No se pudo leer o recortar el GeoTIFF. Comprueba que los archivos "
-            "sean del producto seleccionado y que cubran el polígono.",
+            "No se pudo leer o recortar el GeoTIFF {}. Comprueba que los archivos "
+            "sean de ese producto y que cubran el polígono.".format(product),
             422,
         )
     except Exception:
-        shutil.rmtree(work_dir, ignore_errors=True)
         app.logger.exception("Error inesperado durante el recorte %s", product)
         raise
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
-    response = send_file(
-        output_path,
-        mimetype="image/tiff",
-        as_attachment=True,
-        download_name=output_name,
-        conditional=True,
+    return {
+        "product": product,
+        "filename": output_name,
+        "size_bytes": len(data),
+        "metadata": output_metadata,
+        "data": base64.b64encode(data).decode("ascii"),
+        "preview": raster_preview(data),
+    }
+
+
+def raster_preview(data):
+    """Cotas del GeoTIFF reproyectadas a Web Mercator para pintarlas en el mapa.
+
+    Devuelve una malla float32 (NaN fuera del polígono) de como máximo
+    PREVIEW_MAX_SIZE píxeles de lado y sus límites en latitud/longitud.
+    Cada celda toma la cota máxima de los píxeles que cubre, para que el
+    análisis de colisiones del visor no pierda obstáculos al reducir resolución.
+    """
+    with MemoryFile(data) as memory_file, memory_file.open() as source:
+        dst_crs = "EPSG:3857"
+        transform, width, height = calculate_default_transform(
+            source.crs, dst_crs, source.width, source.height, *source.bounds
+        )
+        scale = max(width, height) / PREVIEW_MAX_SIZE
+        if scale > 1:
+            transform, width, height = calculate_default_transform(
+                source.crs,
+                dst_crs,
+                source.width,
+                source.height,
+                *source.bounds,
+                dst_width=max(1, round(width / scale)),
+                dst_height=max(1, round(height / scale)),
+            )
+
+        grid = np.full((height, width), np.nan, dtype=np.float32)
+        reproject(
+            source=rasterio.band(source, 1),
+            destination=grid,
+            src_transform=source.transform,
+            src_crs=source.crs,
+            src_nodata=source.nodata,
+            dst_transform=transform,
+            dst_crs=dst_crs,
+            dst_nodata=np.nan,
+            resampling=Resampling.max,
+        )
+
+    west, south, east, north = transform_bounds(
+        dst_crs,
+        "EPSG:4326",
+        *rasterio.transform.array_bounds(height, width, transform),
     )
-    response.call_on_close(lambda: shutil.rmtree(work_dir, ignore_errors=True))
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["X-Raster-Metadata"] = json.dumps(
-        output_metadata, separators=(",", ":"), ensure_ascii=True
-    )
-    return response
+    valid = grid[np.isfinite(grid)]
+    return {
+        "width": width,
+        "height": height,
+        "bounds": [[south, west], [north, east]],
+        # Tamaño real del píxel en metros: Web Mercator lo amplía en 1/cos(latitud).
+        "cell_size": abs(transform.a) * math.cos(math.radians((south + north) / 2)),
+        "min": float(valid.min()) if valid.size else None,
+        "max": float(valid.max()) if valid.size else None,
+        "data": base64.b64encode(grid.astype("<f4").tobytes()).decode("ascii"),
+    }
 
 
 @app.get("/api/projects")
@@ -157,10 +235,17 @@ def list_projects():
         with connect_database() as connection:
             rows = connection.execute(
                 """
-                SELECT id, name, product, area_m2, centroid_x, centroid_y,
-                       utm_epsg, output_filename, updated_at
-                FROM public.proyectos
-                ORDER BY updated_at DESC, id DESC
+                SELECT p.id, p.name, p.area_m2, p.centroid_x, p.centroid_y,
+                       p.utm_epsg, p.updated_at,
+                       COALESCE(
+                           array_agg(r.product ORDER BY r.product)
+                               FILTER (WHERE r.product IS NOT NULL),
+                           '{}'
+                       ) AS products
+                FROM public.proyectos p
+                LEFT JOIN public.proyecto_rasters r ON r.proyecto_id = p.id
+                GROUP BY p.id
+                ORDER BY p.updated_at DESC, p.id DESC
                 """
             ).fetchall()
         return jsonify(projects=[serialize_project(row) for row in rows])
@@ -173,20 +258,67 @@ def get_project(project_id):
     try:
         with connect_database() as connection:
             row = connection.execute(
-                """
-                SELECT id, name, product, geometry, area_m2, centroid_x,
-                       centroid_y, utm_zone, utm_epsg, source_files,
-                       output_filename, output_metadata, created_at, updated_at
-                FROM public.proyectos
-                WHERE id = %s
-                """,
+                "SELECT " + PROJECT_COLUMNS + " FROM public.proyectos WHERE id = %s",
                 (project_id,),
             ).fetchone()
-        if not row:
-            return jsonify(error="No existe el proyecto solicitado."), 404
-        return jsonify(project=serialize_project(row))
+            if not row:
+                return jsonify(error="No existe el proyecto solicitado."), 404
+            rasters = fetch_project_rasters(connection, project_id)
+        return jsonify(project=serialize_project(row, rasters))
     except (DatabaseUnavailable, psycopg.Error) as error:
         return database_error(error)
+
+
+@app.get("/api/projects/<int:project_id>/rasters/<product>")
+def download_project_raster(project_id, product):
+    try:
+        row = fetch_project_raster_data(project_id, product)
+    except (DatabaseUnavailable, psycopg.Error) as error:
+        return database_error(error)
+
+    response = send_file(
+        io.BytesIO(bytes(row["data"])),
+        mimetype="image/tiff",
+        as_attachment=True,
+        download_name=row["filename"],
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/api/projects/<int:project_id>/rasters/<product>/preview")
+def preview_project_raster(project_id, product):
+    try:
+        row = fetch_project_raster_data(project_id, product)
+    except (DatabaseUnavailable, psycopg.Error) as error:
+        return database_error(error)
+    try:
+        preview = raster_preview(bytes(row["data"]))
+    except (RasterioError, ValueError) as error:
+        app.logger.warning("No se pudo generar la vista previa de %s: %s", product, error)
+        raise RequestError("No se pudo leer el {} guardado para mostrarlo.".format(product), 422)
+    response = jsonify(preview=preview)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def fetch_project_raster_data(project_id, product):
+    product = product.upper()
+    if product not in PRODUCTS:
+        raise RequestError("El producto debe ser MDT02 o MDS02.", 404)
+    with connect_database() as connection:
+        row = connection.execute(
+            """
+            SELECT filename, data
+            FROM public.proyecto_rasters
+            WHERE proyecto_id = %s AND product = %s
+            """,
+            (project_id, product),
+        ).fetchone()
+    if not row:
+        raise RequestError("Este proyecto no tiene un {} guardado.".format(product), 404)
+    return row
 
 
 @app.post("/api/projects")
@@ -194,37 +326,30 @@ def create_project():
     payload = validate_project_payload(request.get_json(silent=True))
     geometry = parse_geometry(json.dumps(payload["geometry"]))
     projected_centroid, area_m2, utm_zone, utm_epsg = project_centroid(geometry)
-    output_metadata = payload["output_metadata"]
 
     try:
         with connect_database() as connection:
             row = connection.execute(
                 """
                 INSERT INTO public.proyectos (
-                    name, product, geometry, area_m2, centroid_x, centroid_y,
-                    utm_zone, utm_epsg, source_files, output_filename,
-                    output_metadata
+                    name, geometry, area_m2, centroid_x, centroid_y,
+                    utm_zone, utm_epsg
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id, name, product, geometry, area_m2, centroid_x,
-                          centroid_y, utm_zone, utm_epsg, source_files,
-                          output_filename, output_metadata, created_at, updated_at
-                """,
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING """ + PROJECT_COLUMNS,
                 (
                     payload["name"],
-                    payload["product"],
                     Jsonb(geometry),
                     area_m2,
                     projected_centroid[0],
                     projected_centroid[1],
                     utm_zone,
                     utm_epsg,
-                    Jsonb(payload["source_files"]),
-                    output_metadata.get("filename"),
-                    Jsonb(output_metadata),
                 ),
             ).fetchone()
-        return jsonify(project=serialize_project(row)), 201
+            save_project_rasters(connection, row["id"], payload["rasters"])
+            rasters = fetch_project_rasters(connection, row["id"])
+        return jsonify(project=serialize_project(row, rasters)), 201
     except (DatabaseUnavailable, psycopg.Error) as error:
         return database_error(error)
 
@@ -234,42 +359,87 @@ def update_project(project_id):
     payload = validate_project_payload(request.get_json(silent=True))
     geometry = parse_geometry(json.dumps(payload["geometry"]))
     projected_centroid, area_m2, utm_zone, utm_epsg = project_centroid(geometry)
-    output_metadata = payload["output_metadata"]
 
     try:
         with connect_database() as connection:
+            current = connection.execute(
+                "SELECT geometry FROM public.proyectos WHERE id = %s FOR UPDATE",
+                (project_id,),
+            ).fetchone()
+            if not current:
+                return jsonify(error="No existe el proyecto que intentas actualizar."), 404
+
             row = connection.execute(
                 """
                 UPDATE public.proyectos
-                SET name = %s, product = %s, geometry = %s, area_m2 = %s,
+                SET name = %s, geometry = %s, area_m2 = %s,
                     centroid_x = %s, centroid_y = %s, utm_zone = %s,
-                    utm_epsg = %s, source_files = %s, output_filename = %s,
-                    output_metadata = %s, updated_at = now()
+                    utm_epsg = %s, updated_at = now()
                 WHERE id = %s
-                RETURNING id, name, product, geometry, area_m2, centroid_x,
-                          centroid_y, utm_zone, utm_epsg, source_files,
-                          output_filename, output_metadata, created_at, updated_at
-                """,
+                RETURNING """ + PROJECT_COLUMNS,
                 (
                     payload["name"],
-                    payload["product"],
                     Jsonb(geometry),
                     area_m2,
                     projected_centroid[0],
                     projected_centroid[1],
                     utm_zone,
                     utm_epsg,
-                    Jsonb(payload["source_files"]),
-                    output_metadata.get("filename"),
-                    Jsonb(output_metadata),
                     project_id,
                 ),
             ).fetchone()
-        if not row:
-            return jsonify(error="No existe el proyecto que intentas actualizar."), 404
-        return jsonify(project=serialize_project(row))
+
+            # Un recorte guardado solo es válido para el polígono con el que se hizo:
+            # si el polígono cambia, se descartan los que no se han vuelto a recortar.
+            if not shape(current["geometry"]).equals(shape(geometry)):
+                connection.execute(
+                    """
+                    DELETE FROM public.proyecto_rasters
+                    WHERE proyecto_id = %s AND NOT (product = ANY(%s))
+                    """,
+                    (project_id, [raster["product"] for raster in payload["rasters"]]),
+                )
+            save_project_rasters(connection, project_id, payload["rasters"])
+            rasters = fetch_project_rasters(connection, project_id)
+        return jsonify(project=serialize_project(row, rasters))
     except (DatabaseUnavailable, psycopg.Error) as error:
         return database_error(error)
+
+
+def save_project_rasters(connection, project_id, rasters):
+    for raster in rasters:
+        connection.execute(
+            """
+            INSERT INTO public.proyecto_rasters (
+                proyecto_id, product, filename, size_bytes, metadata, data
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (proyecto_id, product) DO UPDATE
+            SET filename = EXCLUDED.filename, size_bytes = EXCLUDED.size_bytes,
+                metadata = EXCLUDED.metadata, data = EXCLUDED.data,
+                updated_at = now()
+            """,
+            (
+                project_id,
+                raster["product"],
+                raster["filename"],
+                len(raster["data"]),
+                Jsonb(raster["metadata"]),
+                raster["data"],
+            ),
+        )
+
+
+def fetch_project_rasters(connection, project_id):
+    return connection.execute(
+        """
+        SELECT product, filename, size_bytes, metadata, updated_at
+        FROM public.proyecto_rasters
+        WHERE proyecto_id = %s
+        ORDER BY product
+        """,
+        (project_id,),
+    ).fetchall()
 
 
 def database_settings():
@@ -317,7 +487,7 @@ def database_error(error):
         return jsonify(error=str(error)), 503
     return jsonify(
         error="No se pudo acceder a la base de datos DRONES. Comprueba la conexión, "
-        "el usuario y que se haya aplicado database/001_proyectos.sql."
+        "el usuario y que se hayan aplicado las migraciones de database/."
     ), 503
 
 
@@ -327,32 +497,66 @@ def validate_project_payload(payload):
     name = payload.get("name")
     if not isinstance(name, str) or not name.strip() or len(name.strip()) > 120:
         raise RequestError("Introduce un nombre de proyecto de 1 a 120 caracteres.")
-    product = payload.get("product")
-    if not isinstance(product, str) or product not in PRODUCTS:
-        raise RequestError("El producto debe ser MDT02 o MDS02.")
     geometry = payload.get("geometry")
     if not isinstance(geometry, dict):
         raise RequestError("El proyecto necesita un polígono GeoJSON.")
-
-    source_files = payload.get("source_files", [])
-    if (
-        not isinstance(source_files, list)
-        or len(source_files) > MAX_FILES
-        or any(not isinstance(filename, str) or len(filename) > 255 for filename in source_files)
-    ):
-        raise RequestError("La lista de ficheros fuente no es válida.")
-    output_metadata = payload.get("output_metadata") or {}
-    if not isinstance(output_metadata, dict):
-        raise RequestError("Los metadatos del GeoTIFF no son válidos.")
-    if output_metadata and output_metadata.get("product") != product:
-        raise RequestError("Los metadatos del GeoTIFF no corresponden al producto seleccionado.")
     return {
         "name": name.strip(),
-        "product": product,
         "geometry": geometry,
-        "source_files": source_files,
-        "output_metadata": output_metadata,
+        "rasters": validate_project_rasters(payload.get("rasters", [])),
     }
+
+
+def validate_project_rasters(rasters):
+    if not isinstance(rasters, list) or len(rasters) > len(PRODUCTS):
+        raise RequestError("La lista de GeoTIFF del proyecto no es válida.")
+
+    validated = []
+    for raster in rasters:
+        if not isinstance(raster, dict):
+            raise RequestError("La lista de GeoTIFF del proyecto no es válida.")
+        product = raster.get("product")
+        if product not in PRODUCTS or any(item["product"] == product for item in validated):
+            raise RequestError("Cada proyecto admite un único GeoTIFF MDT02 y otro MDS02.")
+
+        data_text = raster.get("data")
+        max_mb = MAX_PROJECT_RASTER_BYTES // (1024 * 1024)
+        if not isinstance(data_text, str) or len(data_text) > (MAX_PROJECT_RASTER_BYTES + 2) // 3 * 4:
+            raise RequestError(
+                "El {} recortado supera {} MB y no se puede guardar en el proyecto.".format(
+                    product, max_mb
+                ),
+                413,
+            )
+        try:
+            data = base64.b64decode(data_text, validate=True)
+        except (binascii.Error, ValueError):
+            raise RequestError("El {} recortado no tiene un formato válido.".format(product))
+        if not data:
+            raise RequestError("El {} recortado está vacío.".format(product))
+
+        try:
+            with MemoryFile(data) as memory_file, memory_file.open() as dataset:
+                tagged_product = dataset.tags().get("product")
+        except RasterioError:
+            raise RequestError("El {} recortado no es un GeoTIFF válido.".format(product))
+        if tagged_product != product:
+            raise RequestError(
+                "El GeoTIFF enviado como {} no es un recorte de ese producto.".format(product)
+            )
+
+        metadata = raster.get("metadata")
+        metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        metadata.update(product=product, filename=PRODUCTS[product]["filename"])
+        validated.append(
+            {
+                "product": product,
+                "filename": PRODUCTS[product]["filename"],
+                "metadata": metadata,
+                "data": data,
+            }
+        )
+    return validated
 
 
 def project_centroid(geometry_data):
@@ -374,12 +578,19 @@ def project_centroid(geometry_data):
     return (centroid.x, centroid.y), projected.area, utm_zone, utm_epsg
 
 
-def serialize_project(row):
-    project = dict(row)
-    for field in ("created_at", "updated_at"):
-        if field in project and isinstance(project[field], datetime):
-            project[field] = project[field].astimezone(timezone.utc).isoformat()
+def serialize_project(row, rasters=None):
+    project = serialize_timestamps(row)
+    if rasters is not None:
+        project["rasters"] = [serialize_timestamps(raster) for raster in rasters]
     return project
+
+
+def serialize_timestamps(row):
+    item = dict(row)
+    for field in ("created_at", "updated_at"):
+        if field in item and isinstance(item[field], datetime):
+            item[field] = item[field].astimezone(timezone.utc).isoformat()
+    return item
 
 
 def parse_geometry(geometry_text):

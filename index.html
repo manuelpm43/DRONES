@@ -103,19 +103,17 @@
                     </div>
                     <span class="step-number">02</span>
                 </div>
-                <label class="field-label" for="product-select">Producto de elevación</label>
-                <select id="product-select" class="text-input">
-                    <option value="MDT02">MDT02 · Modelo Digital del Terreno</option>
-                    <option value="MDS02">MDS02 · Modelo Digital de Superficies</option>
-                </select>
-                <p id="product-description">MDT del suelo, con resolución de 2 m.</p>
-                <a id="catalog-link" class="button button-outline" href="https://centrodedescargas.cnig.es/CentroDescargas/modelo-digital-terreno-mdt02-segunda-cobertura" target="_blank" rel="noopener noreferrer">
-                    <span id="catalog-link-label">Abrir MDT02 en CNIG</span><span aria-hidden="true">↗</span>
+                <p>MDT02 (terreno) y MDS02 (superficies), ambos con resolución de 2 m. Descarga las hojas de los dos productos que cubren el polígono.</p>
+                <a class="button button-outline" href="https://centrodedescargas.cnig.es/CentroDescargas/modelo-digital-terreno-mdt02-segunda-cobertura" target="_blank" rel="noopener noreferrer">
+                    <span>Abrir MDT02 en CNIG</span><span aria-hidden="true">↗</span>
+                </a>
+                <a class="button button-outline button-outline-tight" href="https://centrodedescargas.cnig.es/CentroDescargas/modelo-digital-superficies-mds02-segunda-cobertura" target="_blank" rel="noopener noreferrer">
+                    <span>Abrir MDS02 en CNIG</span><span aria-hidden="true">↗</span>
                 </a>
                 <details class="help-details">
                     <summary>¿Qué archivos debo descargar?</summary>
                     <ol>
-                        <li>En CNIG, localiza los ficheros del producto seleccionado que cubren toda el área dibujada.</li>
+                        <li>En CNIG, localiza las hojas MDT02 y MDS02 que cubren toda el área dibujada.</li>
                         <li>Descarga los archivos GeoTIFF/COG (<code>.tif</code> o <code>.tiff</code>); no hace falta descomprimirlos.</li>
                         <li>Si el polígono cruza varias hojas, selecciona todas las hojas que lo intersectan.</li>
                     </ol>
@@ -126,21 +124,29 @@
                 <div class="section-heading">
                     <div>
                         <p class="eyebrow">PROCESADO LOCAL</p>
-                        <h2>Recortar y descargar</h2>
+                        <h2>Recortar MDT02 y MDS02</h2>
                     </div>
                     <span class="step-number">03</span>
                 </div>
-                <label class="file-picker" for="raster-files">
+                <label class="file-picker" for="raster-files-MDT02">
                     <span class="file-picker-icon" aria-hidden="true">⇧</span>
                     <span>
-                        <strong>Seleccionar GeoTIFF del CNIG</strong>
-                        <small id="file-summary">Puedes seleccionar varias hojas (.tif, .tiff)</small>
+                        <strong>Hojas MDT02 · terreno</strong>
+                        <small id="file-summary-MDT02">Puedes seleccionar varias hojas (.tif, .tiff)</small>
                     </span>
                 </label>
-                <input id="raster-files" type="file" accept=".tif,.tiff,image/tiff" multiple>
-                <p class="limit-note">Hasta 50 km² por recorte. El límite puede ajustarse en la configuración local.</p>
+                <input id="raster-files-MDT02" class="raster-input" type="file" accept=".tif,.tiff,image/tiff" multiple>
+                <label class="file-picker file-picker-second" for="raster-files-MDS02">
+                    <span class="file-picker-icon" aria-hidden="true">⇧</span>
+                    <span>
+                        <strong>Hojas MDS02 · superficies</strong>
+                        <small id="file-summary-MDS02">Puedes seleccionar varias hojas (.tif, .tiff)</small>
+                    </span>
+                </label>
+                <input id="raster-files-MDS02" class="raster-input" type="file" accept=".tif,.tiff,image/tiff" multiple>
+                <p class="limit-note">Hasta 50 km² por recorte. Los dos productos se recortan con el mismo polígono.</p>
                 <button id="clip-button" class="button button-dark" type="button" disabled>
-                    Recortar MDT02
+                    Recortar MDT02 y MDS02
                 </button>
                 <p id="status-message" class="status-message" role="status" aria-live="polite">
                     Dibuja el polígono y selecciona los GeoTIFF descargados.
@@ -149,6 +155,40 @@
                     <div class="progress-track"><span id="progress-bar"></span></div>
                     <span id="progress-label">Procesando…</span>
                 </div>
+                <div id="raster-results" class="raster-results" hidden>
+                    <p class="eyebrow">GEOTIFF DEL PROYECTO</p>
+                    <ul id="raster-list" class="raster-list"></ul>
+                </div>
+            </section>
+
+            <section class="panel flight-panel" aria-labelledby="flight-title">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">ANÁLISIS DE VUELO</p>
+                        <h2 id="flight-title">Altura de vuelo y colisiones</h2>
+                    </div>
+                    <span class="step-number">04</span>
+                </div>
+                <button id="takeoff-button" class="button button-primary" type="button" disabled>
+                    Marcar punto de despegue
+                </button>
+                <div id="takeoff-info" class="selection-summary" hidden>
+                    <span>Despegue · ETRS89 / UTM</span>
+                    <strong id="takeoff-coords"></strong>
+                    <span>Cota MDT del despegue</span>
+                    <strong id="takeoff-elevation"></strong>
+                </div>
+                <label class="field-label" for="flight-height">Altura de vuelo sobre el despegue (m)</label>
+                <input id="flight-height" class="text-input" type="number" min="1" max="1000" step="1" value="60">
+                <label class="field-label" for="safety-margin">Margen de seguridad (m)</label>
+                <input id="safety-margin" class="text-input" type="number" min="0" max="500" step="1" value="0">
+                <button id="collision-button" class="button button-dark" type="button" disabled>
+                    Comprobar colisiones
+                </button>
+                <p id="flight-status" class="status-message" role="status" aria-live="polite">
+                    Recorta o abre un MDT02 para marcar el punto de despegue.
+                </p>
+                <ul id="collision-results" class="collision-results" hidden></ul>
             </section>
 
             <footer class="sidebar-footer">
@@ -161,6 +201,23 @@
             <div class="map-hint">
                 <span class="map-hint-dot" aria-hidden="true"></span>
                 <span>Haz clic en «Dibujar polígono» y marca el perímetro</span>
+            </div>
+            <div id="model-panel" class="model-panel" hidden>
+                <p class="eyebrow">MODELO EN EL MAPA</p>
+                <div class="model-switch" role="radiogroup" aria-label="Modelo visible en el mapa">
+                    <button type="button" role="radio" data-model="MDT02">MDT02</button>
+                    <button type="button" role="radio" data-model="MDS02">MDS02</button>
+                    <button type="button" role="radio" data-model="">Ninguno</button>
+                </div>
+                <div id="elevation-legend" class="elevation-legend">
+                    <p class="eyebrow">COTA (m)</p>
+                    <div id="legend-ramp" class="legend-ramp"></div>
+                    <div class="legend-labels">
+                        <span id="legend-min"></span>
+                        <span id="legend-mid"></span>
+                        <span id="legend-max"></span>
+                    </div>
+                </div>
             </div>
             <div class="map-credit">Ortofoto PNOA · Instituto Geográfico Nacional</div>
         </section>
