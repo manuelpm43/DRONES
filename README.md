@@ -110,6 +110,47 @@ visor admite GeoTIFF proyectados en metros, con resolución cercana a 2 m, y
 hojas en el mismo sistema de coordenadas. El área máxima por recorte es 50 km²
 y cada GeoTIFF guardado puede ocupar hasta 64 MB.
 
+## Servidor: drones.geospatiallab.xyz
+
+El visor está publicado en <https://drones.geospatiallab.xyz>, en el mismo
+servidor que BIDELAN (217.71.202.62, Ubuntu). Pide usuario y contraseña.
+
+- **Código**: `/opt/drones`, un `git clone` de este repositorio. Como es privado,
+  el servidor lo descarga con una *deploy key* de solo lectura
+  (`/root/.ssh/drones_github_deploy`, registrada en GitHub → Settings → Deploy
+  keys); el clon ya la tiene configurada en `core.sshCommand`.
+- **Configuración**: `/opt/drones/.env` (solo root y el usuario `drones`).
+  Conecta a PostgreSQL en `127.0.0.1:5432` sin túnel y define
+  `DRONES_ALLOWED_HOSTS=drones.geospatiallab.xyz`.
+- **Proceso**: servicio systemd `drones` ([deploy/drones.service](./deploy/drones.service)),
+  gunicorn como usuario de sistema `drones`, escuchando solo en `127.0.0.1:5001`.
+- **nginx**: sitio `drones` ([deploy/nginx-drones.conf](./deploy/nginx-drones.conf)),
+  con HTTPS de Let's Encrypt (Certbot, renovación automática) y autenticación
+  básica con los usuarios de `/etc/nginx/drones.htpasswd`.
+- **DNS**: registro `A` `drones` → `217.71.202.62` en Cloudflare, en gris
+  ("DNS only"), igual que `visor`; con el proxy activado Certbot no puede
+  renovar el certificado.
+
+Actualizar el servidor con lo último de GitHub (como root):
+
+```bash
+cd /opt/drones && git pull
+.venv/bin/pip install -q -r requirements.txt   # solo si cambió requirements.txt
+systemctl restart drones
+```
+
+Las migraciones nuevas de `database/` se aplican a mano con
+`sudo -u postgres psql -d DRONES -f database/<migración>.sql`.
+
+Añadir o cambiar la contraseña de un usuario del visor (como root):
+
+```bash
+printf "USUARIO:%s\n" "$(openssl passwd -6 'CONTRASEÑA')" >> /etc/nginx/drones.htpasswd
+```
+
+Para cambiar la contraseña de un usuario existente, borra antes su línea del
+archivo. No hace falta recargar nginx.
+
 ## Pruebas
 
 ```powershell
