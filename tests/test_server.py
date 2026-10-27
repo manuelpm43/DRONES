@@ -85,6 +85,26 @@ class ClipEndpointTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_accepts_configured_public_domain(self):
+        with patch("server.ALLOWED_HOSTS", {"localhost", "127.0.0.1", "drones.example.org"}):
+            response = self.post_clip(
+                {"MDT02": self.full_coverage(100, "MDT02")},
+                headers={"Host": "drones.example.org", "Origin": "https://drones.example.org"},
+            )
+        self.assertEqual(response.status_code, 200, response.get_json())
+
+    def test_rejects_unconfigured_domain(self):
+        response = self.client.get("/api/projects", headers={"Host": "otro.example.org"})
+        self.assertEqual(response.status_code, 403)
+
+    def test_rejects_origin_from_another_site_on_public_domain(self):
+        with patch("server.ALLOWED_HOSTS", {"localhost", "127.0.0.1", "drones.example.org"}):
+            response = self.client.get(
+                "/api/projects",
+                headers={"Host": "drones.example.org", "Origin": "https://drones.example.org.attacker.net"},
+            )
+        self.assertEqual(response.status_code, 403)
+
     def test_rejects_invalid_polygon(self):
         response = self.post_clip(
             {"MDT02": [(self.make_raster(440000, 100), "tile.tif")]},

@@ -1,0 +1,23 @@
+# Servicio systemd del visor DRONES en el servidor.
+# Instalar en /etc/systemd/system/drones.service y activar con:
+#   systemctl daemon-reload && systemctl enable --now drones
+[Unit]
+Description=Visor DRONES MDT02/MDS02 (Flask + gunicorn)
+After=network.target postgresql.service
+
+[Service]
+User=drones
+Group=drones
+WorkingDirectory=/opt/drones
+# Recortes de muchas hojas pueden tardar: 10 minutos por petición como máximo.
+ExecStart=/opt/drones/.venv/bin/gunicorn --workers 2 --timeout 600 --bind 127.0.0.1:5001 server:app
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

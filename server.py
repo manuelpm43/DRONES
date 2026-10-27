@@ -54,6 +54,13 @@ MAX_PROJECT_RASTER_BYTES = int(
 # Lado máximo, en píxeles, de la vista previa que se pinta en el mapa.
 PREVIEW_MAX_SIZE = 1024
 PORT = int(os.environ.get("PORT", "5000"))
+# Nombres de host desde los que se sirve el visor. En el servidor se añade su
+# dominio público (p. ej. drones.geospatiallab.xyz) con DRONES_ALLOWED_HOSTS.
+ALLOWED_HOSTS = {"localhost", "127.0.0.1"} | {
+    host.strip().lower()
+    for host in os.environ.get("DRONES_ALLOWED_HOSTS", "").split(",")
+    if host.strip()
+}
 PRODUCTS = {
     "MDT02": {
         "label": "Modelo Digital del Terreno",
@@ -83,22 +90,21 @@ class DatabaseUnavailable(Exception):
 
 
 @app.before_request
-def require_local_request_origin():
+def require_allowed_request_origin():
     if not request.path.startswith("/api/") or request.path == "/api/health":
         return None
 
-    allowed_hosts = {"localhost", "127.0.0.1"}
     request_url = urlsplit("http://" + request.host)
-    if request_url.hostname not in allowed_hosts:
-        return jsonify(error="El procesador solo acepta conexiones locales."), 403
+    if request_url.hostname not in ALLOWED_HOSTS:
+        return jsonify(error="El procesador no acepta peticiones para este dominio."), 403
 
+    # Una página de otro sitio no puede usar la API: el origen debe ser el propio visor.
     origin = request.headers.get("Origin")
     if origin:
         origin_url = urlsplit(origin)
         if (
-            origin_url.scheme != "http"
-            or origin_url.hostname not in allowed_hosts
-            or origin_url.port != request_url.port
+            origin_url.scheme not in {"http", "https"}
+            or origin_url.netloc.lower() != request.host.lower()
         ):
             return jsonify(error="Origen de petición no permitido."), 403
     return None

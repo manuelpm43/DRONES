@@ -1003,7 +1003,7 @@ function clipSelectedRasters() {
     progressWrap.hidden = false;
     progressBar.style.width = "0%";
     progressLabel.textContent = "Subiendo GeoTIFF…";
-    setStatus("Subiendo archivos y recortando " + productLabel + " en este equipo.");
+    setStatus("Subiendo archivos y recortando " + productLabel + ".");
     updateSelection();
 
     const request = new XMLHttpRequest();
@@ -1041,7 +1041,7 @@ function clipSelectedRasters() {
         finishClipping();
     });
     request.addEventListener("error", function () {
-        setStatus("No se pudo conectar con el procesador local. Comprueba que server.py esté activo.", "error");
+        setStatus("No se pudo conectar con el servidor del visor. Comprueba que siga activo.", "error");
         finishClipping();
     });
     request.addEventListener("abort", function () {
@@ -1059,8 +1059,8 @@ async function loadProjects() {
             result = await response.json();
         } catch (error) {
             throw new Error(
-                "El visor no está abierto desde su servidor. Arráncalo con iniciar.ps1 " +
-                "y entra en http://127.0.0.1:5000."
+                "El servidor del visor no ha respondido correctamente. Si lo usas en local, " +
+                "arráncalo con iniciar.ps1 y entra en http://127.0.0.1:5000."
             );
         }
         if (!response.ok) {
