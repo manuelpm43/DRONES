@@ -1054,7 +1054,15 @@ function clipSelectedRasters() {
 async function loadProjects() {
     try {
         const response = await fetch("/api/projects");
-        const result = await response.json();
+        let result;
+        try {
+            result = await response.json();
+        } catch (error) {
+            throw new Error(
+                "El visor no está abierto desde su servidor. Arráncalo con iniciar.ps1 " +
+                "y entra en http://127.0.0.1:5000."
+            );
+        }
         if (!response.ok) {
             throw new Error(result.error || "No se pudieron cargar los proyectos.");
         }
